@@ -110,6 +110,6 @@ NODE_CLASS_MAPPINGS = {
     "AutoAspectUnpad": AutoAspectUnpad,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "AutoAspectPad": "Comal - Auto Aspect Pad (Qwen)",
-    "AutoAspectUnpad": "Comal - Auto Aspect Unpad (Restore)",
+    "AutoAspectPad": "Auto Aspect Pad (Qwen)",
+    "AutoAspectUnpad": "Auto Aspect Unpad (Restore)",
 }
