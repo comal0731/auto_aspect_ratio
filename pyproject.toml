@@ -4,6 +4,9 @@ description = "Auto aspect-ratio padding/unpadding for Qwen Image Edit and simil
 version = "1.0.1"
 license = { file = "LICENSE" }
 
+[project.urls]
+Repository = "https://github.com/comal0731/auto_aspect_ratio"
+
 [tool.comfy]
 PublisherId = "comal"
 DisplayName = "Auto Aspect Pad"
