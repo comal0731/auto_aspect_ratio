@@ -1,10 +1,10 @@
 [project]
 name = "auto-aspect-ratio"
 description = "Auto aspect-ratio padding/unpadding for Qwen Image Edit and similar diffusion pipelines"
-version = "1.0.0"
+version = "1.0.1"
 license = { file = "LICENSE" }
 
 [tool.comfy]
-PublisherId = "comal0731"
-DisplayName = "Comal - Auto Aspect Pad"
+PublisherId = "comal"
+DisplayName = "Auto Aspect Pad"
 Icon = ""
