@@ -1,6 +1,8 @@
 import torch
 import torch.nn.functional as F
 import math
+import numpy as np
+from PIL import Image
 
 QWEN_RATIOS = {
     "1:1": (1, 1),
@@ -15,6 +17,35 @@ QWEN_RATIOS = {
 }
 
 ASPECT_RATIO_OPTIONS = ["auto"] + list(QWEN_RATIOS.keys())
+INTERPOLATION_OPTIONS = ["lanczos", "bicubic", "bilinear"]
+
+# 원본과 이 값보다 더 가까운 비율은 "거의 정확히 일치"로 간주하고 건너뜀 (단, 1:1은 예외)
+EXACT_MATCH_EPS = 0.02
+
+
+def resize_tensor(img, size, mode="lanczos"):
+    target_h, target_w = size
+
+    if mode != "lanczos":
+        return F.interpolate(img, size=(target_h, target_w), mode=mode, align_corners=False)
+
+    b, c, h, w = img.shape
+    device, dtype = img.device, img.dtype
+    img_cpu = img.detach().cpu()
+    out = torch.empty((b, c, target_h, target_w), dtype=dtype)
+
+    pil_mode = {1: "L", 3: "RGB", 4: "RGBA"}.get(c, "RGB")
+    for i in range(b):
+        arr = img_cpu[i].movedim(0, -1).clamp(0, 1).numpy()
+        arr = (arr * 255.0 + 0.5).astype(np.uint8)
+        pil_img = Image.fromarray(arr if c > 1 else arr[:, :, 0], mode=pil_mode)
+        pil_resized = pil_img.resize((target_w, target_h), resample=Image.LANCZOS)
+        arr_resized = np.array(pil_resized).astype(np.float32) / 255.0
+        if c == 1:
+            arr_resized = arr_resized[:, :, None]
+        out[i] = torch.from_numpy(arr_resized).movedim(-1, 0).to(dtype)
+
+    return out.to(device)
 
 
 class AutoAspectPad:
@@ -26,6 +57,7 @@ class AutoAspectPad:
                 "aspect_ratio": (ASPECT_RATIO_OPTIONS, {"default": "auto"}),
                 "megapixels": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 4.0, "step": 0.05}),
                 "multiple": ("INT", {"default": 8, "min": 8, "max": 128, "step": 8}),
+                "interpolation": (INTERPOLATION_OPTIONS, {"default": "lanczos"}),
             }
         }
 
@@ -34,19 +66,27 @@ class AutoAspectPad:
     FUNCTION = "run"
     CATEGORY = "image/resize"
 
-    def run(self, image, aspect_ratio, megapixels, multiple):
+    def run(self, image, aspect_ratio, megapixels, multiple, interpolation):
         b, h, w, c = image.shape
         orig_ratio = w / h
 
         if aspect_ratio == "auto":
-            # 원본과 가장 가까운 공식 비율을 자동으로 판단
-            best_rw, best_rh, best_diff = 1, 1, float("inf")
-            for rw, rh in QWEN_RATIOS.values():
+            candidates = []
+            for key, (rw, rh) in QWEN_RATIOS.items():
                 diff = abs(math.log(rw / rh) - math.log(orig_ratio))
-                if diff < best_diff:
-                    best_diff, best_rw, best_rh = diff, rw, rh
+                candidates.append((diff, key, rw, rh))
+            candidates.sort(key=lambda x: x[0])
+
+            top_diff, top_key, top_rw, top_rh = candidates[0]
+
+            if top_key == "1:1":
+                # 1:1은 패딩이 항상 대칭이라 건너뛸 필요 없음
+                best_rw, best_rh = top_rw, top_rh
+            elif len(candidates) > 1 and top_diff < EXACT_MATCH_EPS:
+                _, _, best_rw, best_rh = candidates[1]
+            else:
+                best_rw, best_rh = top_rw, top_rh
         else:
-            # 사용자가 직접 고른 비율 사용
             best_rw, best_rh = QWEN_RATIOS[aspect_ratio]
 
         target_pixels = megapixels * 1024 * 1024
@@ -59,7 +99,7 @@ class AutoAspectPad:
         inner_h = max(1, round(h * scale))
 
         img = image.movedim(-1, 1)
-        resized = F.interpolate(img, size=(inner_h, inner_w), mode="bilinear", align_corners=False)
+        resized = resize_tensor(img, (inner_h, inner_w), mode=interpolation)
 
         pad_left = (target_w - inner_w) // 2
         pad_top = (target_h - inner_h) // 2
@@ -73,6 +113,7 @@ class AutoAspectPad:
             "orig_w": w, "orig_h": h,
             "pad_left": pad_left, "pad_top": pad_top,
             "inner_w": inner_w, "inner_h": inner_h,
+            "interpolation": interpolation,
         }
         return (out, target_w, target_h, pad_info)
 
@@ -98,10 +139,11 @@ class AutoAspectUnpad:
         pad_top = pad_info["pad_top"]
         inner_w = pad_info["inner_w"]
         inner_h = pad_info["inner_h"]
+        mode = pad_info.get("interpolation", "lanczos")
 
         img = image.movedim(-1, 1)
         cropped = img[:, :, pad_top:pad_top + inner_h, pad_left:pad_left + inner_w]
-        restored = F.interpolate(cropped, size=(orig_h, orig_w), mode="bilinear", align_corners=False)
+        restored = resize_tensor(cropped, (orig_h, orig_w), mode=mode)
         return (restored.movedim(1, -1),)
 
 
