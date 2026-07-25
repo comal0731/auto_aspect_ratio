@@ -58,15 +58,18 @@ class AutoAspectPad:
                 "megapixels": ("FLOAT", {"default": 1.0, "min": 0.1, "max": 4.0, "step": 0.05}),
                 "multiple": ("INT", {"default": 8, "min": 8, "max": 128, "step": 8}),
                 "interpolation": (INTERPOLATION_OPTIONS, {"default": "lanczos"}),
-            }
+            },
+            "optional": {
+                "mask": ("MASK",),
+            },
         }
 
-    RETURN_TYPES = ("IMAGE", "INT", "INT", "PADINFO")
-    RETURN_NAMES = ("image", "width", "height", "pad_info")
+    RETURN_TYPES = ("IMAGE", "INT", "INT", "PADINFO", "MASK")
+    RETURN_NAMES = ("image", "width", "height", "pad_info", "mask")
     FUNCTION = "run"
     CATEGORY = "image/resize"
 
-    def run(self, image, aspect_ratio, megapixels, multiple, interpolation):
+    def run(self, image, aspect_ratio, megapixels, multiple, interpolation, mask=None):
         b, h, w, c = image.shape
         orig_ratio = w / h
 
@@ -104,10 +107,48 @@ class AutoAspectPad:
         pad_left = (target_w - inner_w) // 2
         pad_top = (target_h - inner_h) // 2
 
-        canvas = torch.zeros((b, c, target_h, target_w), dtype=img.dtype)
+        canvas = torch.zeros(
+            (b, c, target_h, target_w),
+            dtype=img.dtype,
+            device=img.device,
+        )
         canvas[:, :, pad_top:pad_top + inner_h, pad_left:pad_left + inner_w] = resized
 
         out = canvas.movedim(1, -1)
+
+        if mask is None:
+            out_mask = torch.zeros(
+                (b, target_h, target_w),
+                dtype=image.dtype,
+                device=image.device,
+            )
+        else:
+            mask = mask.to(device=image.device, dtype=image.dtype)
+            if mask.ndim == 2:
+                mask = mask.unsqueeze(0)
+            if mask.shape[0] == 1 and b > 1:
+                mask = mask.expand(b, -1, -1)
+            elif mask.shape[0] != b:
+                raise ValueError(
+                    f"Mask batch size ({mask.shape[0]}) must be 1 or match "
+                    f"the image batch size ({b})."
+                )
+
+            resized_mask = resize_tensor(
+                mask.unsqueeze(1),
+                (inner_h, inner_w),
+                mode=interpolation,
+            ).squeeze(1)
+            out_mask = torch.zeros(
+                (b, target_h, target_w),
+                dtype=resized_mask.dtype,
+                device=resized_mask.device,
+            )
+            out_mask[
+                :,
+                pad_top:pad_top + inner_h,
+                pad_left:pad_left + inner_w,
+            ] = resized_mask
 
         pad_info = {
             "orig_w": w, "orig_h": h,
@@ -115,7 +156,7 @@ class AutoAspectPad:
             "inner_w": inner_w, "inner_h": inner_h,
             "interpolation": interpolation,
         }
-        return (out, target_w, target_h, pad_info)
+        return (out, target_w, target_h, pad_info, out_mask)
 
 
 class AutoAspectUnpad:
@@ -152,6 +193,6 @@ NODE_CLASS_MAPPINGS = {
     "AutoAspectUnpad": AutoAspectUnpad,
 }
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "AutoAspectPad": "Auto Aspect Pad (Qwen)",
-    "AutoAspectUnpad": "Auto Aspect Unpad (Restore)",
+    "AutoAspectPad": "Auto Aspect Pad Comal",
+    "AutoAspectUnpad": "Auto Aspect Unpad Comal",
 }
